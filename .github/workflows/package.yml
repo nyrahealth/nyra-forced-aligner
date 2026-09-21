@@ -1,0 +1,89 @@
+name: Package
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test package
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install package (CPU torch)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ".[dev]"
+      - name: Run fast tests
+        run: python -m pytest -q
+
+  build:
+    name: Build distribution
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Absolute image URLs for the PyPI description
+        run: |
+          sed -i 's#](docs/#](https://huggingface.co/nyralabs/nyra_forced_aligner_en/resolve/main/docs/#g' README.md
+      - name: Build and check
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine
+          python -m build
+          python -m twine check --strict dist/*
+      - name: Install wheel smoke test
+        run: |
+          python -m venv /tmp/nfa-wheel-test
+          /tmp/nfa-wheel-test/bin/pip install --upgrade pip
+          /tmp/nfa-wheel-test/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
+          /tmp/nfa-wheel-test/bin/pip install dist/nyra_forced_aligner-*.whl
+          /tmp/nfa-wheel-test/bin/python - <<'PY'
+          import nyra_align
+          from nyra_align import Aligner, resolve_model
+          assert resolve_model(None) == "nyralabs/nyra_forced_aligner_en"
+          try:
+              Aligner(language="de")
+              raise SystemExit("expected NotImplementedError")
+          except NotImplementedError:
+              pass
+          print("nyra-forced-aligner", nyra_align.__version__)
+          PY
+          /tmp/nfa-wheel-test/bin/nyra-forced-aligner --help > /dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nyra-forced-aligner-dist
+          path: dist/*
+
+  publish:
+    name: Publish to PyPI
+    needs: [test, build]
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: nyra-forced-aligner-dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # API token if the secret is set, otherwise PyPI trusted publishing (OIDC)
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true

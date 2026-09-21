@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nyra-forced-aligner"
+dynamic = ["version"]
+description = "Verbatim-aware, noise-robust forced alignment: precise word and phone timestamps for conversational speech, including fillers and vocal sounds"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [{ name = "nyra health GmbH" }]
+keywords = ["forced alignment", "speech", "word timestamps", "phonetics", "disfluency", "wavlm"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+    "numpy>=1.24",
+    "torch>=2.0",
+    "soundfile>=0.12",
+    "soxr>=0.3",
+    "transformers>=4.40",
+    "huggingface_hub>=0.20",
+    "phonemizer>=3.2",
+    "numba>=0.58",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.urls]
+Homepage = "https://nyra-labs.com/research/nyra-forced-aligner"
+Repository = "https://github.com/nyrahealth/nyra-forced-aligner"
+Models = "https://huggingface.co/nyralabs"
+
+[project.scripts]
+nyra-forced-aligner = "nyra_align.cli:main"
+nyra-align = "nyra_align.cli:main"
+nyra-align-export = "nyra_align.export:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "nyra_align.version.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["nyra_align*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
