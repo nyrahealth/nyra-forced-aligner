@@ -7,7 +7,7 @@
 verbatim-aware, noise-robust, and fast.**
 
 [Blog post](https://nyra-labs.com/research/nyra-forced-aligner) ·
-[Paper](#) <!-- TODO: ICASSP 2026 link --> ·
+[Paper](https://arxiv.org/abs/2610.22583)
 [Models](https://huggingface.co/nyralabs) ·
 [PyPI](https://pypi.org/project/nyra-forced-aligner/) ·
 [CrisperWhisper](https://github.com/nyrahealth/CrisperWhisper)
