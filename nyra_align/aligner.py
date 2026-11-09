@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from .confidence import frame_log_likelihoods, word_confidence
 from .decoder import EmissionComputer, align_path, decode_with_ladder
 from .decoder_gpu import _emission_costs, viterbi_gpu
 from .features import (apply_chain, apply_chain_torch, extract_wavlm,
@@ -89,6 +90,7 @@ class Aligner:
         self.precision = precision
         self.wavlm_batch = wavlm_batch
         self._wavlm = None
+        self._all_pdfs = None
         self.g2p = G2P(self.model.phone_map,
                        language=self.model.meta["espeak"]["language"],
                        with_stress=self.model.meta["espeak"]["with_stress"])
@@ -124,6 +126,14 @@ class Aligner:
                             return_torch=True)
         return apply_chain_torch(raw, self.model.feature_chain,
                                  self.model.torch_arrays(self.device))
+
+    @property
+    def all_pdfs(self) -> EmissionComputer:
+        """Emissions of every pdf of the model, for confidence scores."""
+        if self._all_pdfs is None:
+            self._all_pdfs = EmissionComputer(
+                self.model, np.arange(self.model.num_pdfs), self.device)
+        return self._all_pdfs
 
     # -- transcript -----------------------------------------------------------
 
@@ -226,24 +236,32 @@ class Aligner:
         segs = align_path(graph, path, model.frame_shift)
         sound_tags = set(model.sound_tags.values())
         id2p = model.id_to_phone
+        forced_ll, best_ll = frame_log_likelihoods(
+            feats_t, self.all_pdfs, graph.pdf[path])
 
         words: list[Word] = []
         silences: list[Phone] = []
+        spans: list[list[int]] = []
         for tok_idx, phone_id, start, end in segs:
             name = id2p[phone_id]
             if tok_idx < 0:
                 silences.append(Phone(name, start, end))
                 continue
             tok = tokens[tok_idx]
+            f0 = round(start / model.frame_shift)
+            f1 = round(end / model.frame_shift)
             if not words or words[-1]._tok_idx != tok_idx:  # type: ignore
                 w = Word(word=tok.original, start=start, end=end,
                          type=_word_type(tok.word, name, sound_tags))
                 w._tok_idx = tok_idx  # type: ignore
                 words.append(w)
+                spans.append([f0, f1])
             words[-1].phones.append(Phone(name, start, end))
             words[-1].end = end
-        for w in words:
+            spans[-1][1] = f1
+        for w, (f0, f1) in zip(words, spans):
             del w._tok_idx  # type: ignore
+            w.confidence = word_confidence(forced_ll[f0:f1], best_ll[f0:f1])
         return AlignmentResult(words, silences, skipped, duration)
 
 

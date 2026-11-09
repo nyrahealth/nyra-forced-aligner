@@ -21,6 +21,9 @@ class Word:
     end: float
     type: str = "w"          # w=word, f=filler, s=sound event, c=cutoff
     phones: list[Phone] = field(default_factory=list)
+    # 0..1, how well the audio under the word fits it (see confidence.py);
+    # low values point at transcript errors and words displaced by them
+    confidence: float | None = None
 
 
 @dataclass
@@ -44,6 +47,8 @@ class AlignmentResult:
                     "start": round(w.start, 3),
                     "end": round(w.end, 3),
                     "type": w.type,
+                    "confidence": (None if w.confidence is None
+                                   else round(w.confidence, 3)),
                     "phones": [
                         {"phone": p.phone,
                          "start": round(p.start, 3),

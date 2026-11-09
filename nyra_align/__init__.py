@@ -4,7 +4,7 @@
     aligner = Aligner()                    # English, published model, device auto
     aligner = Aligner(pro=True)            # noise-robust variant
     result = aligner.align("audio.wav", "so i uhm [laughter] went there")
-    result.words                # Word(word, start, end, type, phones)
+    result.words                # Word(word, start, end, type, phones, confidence)
     result.to_textgrid("out.TextGrid")
 """
 

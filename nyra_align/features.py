@@ -3,7 +3,8 @@
 Mirrors the training/eval feature path exactly:
   waveform (16 kHz mono)
     -> WavLM-large hidden layer 23 (20 ms frames), long audio in 30 s windows
-       with 1 s overlap, overlap frames dropped from the later window
+       with 1 s overlap, each window's frames placed on the global 20 ms grid
+       and the overlap split at its midpoint
     -> linear upsample 20 ms -> 10 ms
     -> feature chain from meta.json (e.g. PCA -> per-utt CMVN -> splice -> LDA)
 """
@@ -15,6 +16,39 @@ import torch
 
 MAX_AUDIO_SECONDS = 30
 BATCH_OVERLAP_SECONDS = 1
+# WavLM's convolutional front end: 400-sample receptive field, 320-sample hop.
+# A 30 s window therefore gives 1499 frames, not 1500.
+RECEPTIVE_FIELD = 400
+HOP = 320
+
+
+def wavlm_frames(num_samples: int) -> int:
+    """Frames WavLM returns for `num_samples` of 16 kHz audio in one pass."""
+    return max(0, (num_samples - RECEPTIVE_FIELD) // HOP + 1)
+
+
+def stitch_windows(starts: list[int], window_feats: list) -> "torch.Tensor":
+    """Join per-window 20 ms frames on the global grid.
+
+    `starts` are the windows' start samples (multiples of HOP). Frame j of the
+    window starting at sample s is global frame s // HOP + j; where two windows
+    overlap, each frame comes from the window it is more central in. The
+    result has exactly as many frames as one pass over the whole recording.
+    """
+    if len(window_feats) == 1:
+        return window_feats[0]
+    window_frames = wavlm_frames(MAX_AUDIO_SECONDS * 16_000)
+
+    def seam(left: int, right: int) -> int:
+        return (right // HOP + left // HOP + window_frames) // 2
+
+    pieces = []
+    for i, (start, feats) in enumerate(zip(starts, window_feats)):
+        first = start // HOP
+        begin = 0 if i == 0 else seam(starts[i - 1], start) - first
+        end = len(feats) if i == len(starts) - 1 else seam(start, starts[i + 1]) - first
+        pieces.append(feats[begin:end])
+    return torch.cat(pieces, dim=0)
 
 
 def load_wavlm(model_name: str = "microsoft/wavlm-large",
@@ -80,22 +114,21 @@ def extract_wavlm(model, waveform: torch.Tensor, layer: int = 23,
     `batch_size` windows), the shorter tail window runs on its own. The
     stitch, 20->10 ms upsample, and (optionally) everything downstream stay
     on `device`.
+
+    Up to 0.2.2 the stitch dropped a fixed 50 frames per later window, as if a
+    30 s window gave 1500 frames; it gives 1499, so the timeline lost 20 ms
+    every 29 s (2.3 s after an hour). Audio of up to 30 s is unaffected.
     """
     sr = 16_000
     num_samples = waveform.shape[1]
     max_samples = MAX_AUDIO_SECONDS * sr
     overlap_samples = BATCH_OVERLAP_SECONDS * sr
 
-    if num_samples <= max_samples:
-        chunks = [waveform]
-    else:
-        chunks, start = [], 0
-        while start < num_samples:
-            end = min(start + max_samples, num_samples)
-            chunks.append(waveform[:, start:end])
-            if end == num_samples:
-                break
-            start = end - overlap_samples
+    starts = [0]
+    if num_samples > max_samples:
+        while starts[-1] + max_samples < num_samples:
+            starts.append(starts[-1] + max_samples - overlap_samples)
+    chunks = [waveform[:, start:start + max_samples] for start in starts]
 
     model_dtype = next(model.parameters()).dtype
     full = [c for c in chunks if c.shape[1] == max_samples]
@@ -114,15 +147,7 @@ def extract_wavlm(model, waveform: torch.Tensor, layer: int = 23,
                             output_hidden_states=True)
                 all_feats[i] = out.hidden_states[layer][0].float()
 
-    if len(all_feats) == 1:
-        feats_20ms = all_feats[0]
-    else:
-        overlap_frames = overlap_samples // 320
-        merged = [all_feats[0]]
-        for i in range(1, len(all_feats)):
-            merged.append(all_feats[i][overlap_frames:]
-                          if overlap_frames > 0 else all_feats[i])
-        feats_20ms = torch.cat(merged, dim=0)
+    feats_20ms = stitch_windows(starts, all_feats)
 
     feats_10ms = torch.nn.functional.interpolate(
         feats_20ms.T.unsqueeze(0), scale_factor=2,

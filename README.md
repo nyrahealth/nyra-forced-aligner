@@ -219,8 +219,36 @@ set of ablations, and how the models are trained are in the paper.
 | `Aligner(precision="fp32")` | WavLM in fp32 instead of fp16; bit-exact parity with the reference implementation (fp16 moves ≤30 ms on ~0.5% of word boundaries) |
 | `Aligner(wavlm_batch=16)` | Batch size for the 30 s WavLM windows on long audio (tune to VRAM) |
 | `aligner.align_features(feats, text)` | Re-align a transcript against cached features (decode is ~6 ms per 3.5 s utterance) |
+| `w.confidence` | 0-1 per word: how well the audio under the word fits it. Low values point at transcript errors and at words displaced by untranscribed speech next to them (see below) |
 | `result.events` | Just the filler / laughter / cut-off tokens |
 | `result.silences` | Silence segments between words |
+
+### Word confidence
+
+Every word carries a `confidence` between 0 and 1: per frame, the gap between
+the log-likelihood of the state the alignment chose and that of the best state
+of the whole model, averaged over the word and mapped through
+`exp(-gap / 10)`. Calibrated on an hour of Buckeye with corrupted transcripts:
+correctly transcribed words have a median confidence of 0.87, and a cut-off at
+0.5 catches 99% of substituted words, 93% of words misplaced by an
+untranscribed stretch of speech and 96% of the words of an unrelated
+transcript, while also flagging ~10% of correct words (fast, reduced or noisy
+speech). Use it to rank words for review, not as a probability.
+
+### Long recordings
+
+Any length works in one call. Since 0.2.3 the 30 s WavLM windows are stitched
+on the exact 20 ms grid; 0.2.2 and earlier lost 20 ms every 29 s on recordings
+longer than 30 s (2.3 s after an hour). Measured on an hour of Buckeye, the
+mean word-boundary error is the same whether it is aligned in one call or in
+15 s pieces:
+
+| Same hour of Buckeye, aligned... | 0.2.2 | 0.2.3 |
+|---|---:|---:|
+| in ~15 s pieces | 17.2 ms | 17.2 ms |
+| in ~1 min pieces | 23.9 ms | 16.8 ms |
+| in ~10 min pieces | 197.5 ms | 16.5 ms |
+| in one call | 1154.9 ms | 16.7 ms |
 
 ## How it works
 

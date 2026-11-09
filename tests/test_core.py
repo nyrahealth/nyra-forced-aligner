@@ -163,3 +163,34 @@ def test_audio_loading_without_torchaudio(tmp_path):
     assert same.shape == (1, 16000)
     with pytest.raises(RuntimeError):
         (tmp_path / "bad.m4a").write_bytes(b"not audio"); load_audio(str(tmp_path / "bad.m4a"))
+
+
+def test_long_audio_windows_stitch_on_the_exact_frame_grid():
+    """Each 20 ms frame lands at its own place; up to 0.2.2 a frame was lost per window."""
+    import torch
+    from nyra_align.features import HOP, stitch_windows, wavlm_frames
+
+    window = 30 * 16_000
+    for seconds in (1, 30, 31, 59.5, 600, 3600 + 7.3):
+        n = round(seconds * 16_000)
+        starts = [0]
+        while starts[-1] + window < n:
+            starts.append(starts[-1] + window - 16_000)
+        feats = [torch.arange(wavlm_frames(min(window, n - s)), dtype=torch.float32)[:, None] + s // HOP
+                 for s in starts]
+        assert stitch_windows(starts, feats)[:, 0].tolist() == list(range(wavlm_frames(n)))
+
+
+def test_word_confidence_separates_matching_from_mismatched_audio(model_dir):
+    from nyra_align import Aligner
+
+    feats, _ = _features(["SIL", "AA", "B", "SIL", "FUM", "B", "AA", "SIL"])
+    al = Aligner(model_dir, device="cpu")
+    right = al.align_features(feats, "ab [UM] ba")
+    wrong = al.align_features(feats, "ba [UM] ab")
+    assert all(0.0 < w.confidence <= 1.0 for w in right.words + wrong.words)
+    assert min(w.confidence for w in right.words) > 0.9
+    for good, bad in zip(right.words, wrong.words):
+        if good.word != "[UM]":
+            assert bad.confidence < good.confidence
+    assert right.to_dict()["words"][0]["confidence"] == round(right.words[0].confidence, 3)
