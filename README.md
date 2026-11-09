@@ -225,15 +225,50 @@ set of ablations, and how the models are trained are in the paper.
 
 ### Word confidence
 
-Every word carries a `confidence` between 0 and 1: per frame, the gap between
-the log-likelihood of the state the alignment chose and that of the best state
-of the whole model, averaged over the word and mapped through
-`exp(-gap / 10)`. Calibrated on an hour of Buckeye with corrupted transcripts:
-correctly transcribed words have a median confidence of 0.87, and a cut-off at
-0.5 catches 99% of substituted words, 93% of words misplaced by an
-untranscribed stretch of speech and 96% of the words of an unrelated
-transcript, while also flagging ~10% of correct words (fast, reduced or noisy
-speech). Use it to rank words for review, not as a probability.
+Every word carries a `confidence` between 0 and 1 that says how well the audio
+under the word fits the word the transcript claims is there. Per 10 ms frame,
+the aligner compares the log-likelihood of the sound it placed there with that
+of the best-fitting sound of the whole model; the mean gap over the word's
+frames is mapped through `exp(-gap / 10)`. A word that really is in the audio
+where it was placed scores close to 1; a word that is not (a transcription
+error, or a correct word pushed onto the wrong audio) scores close to 0.
+
+**How to read it.** Measured on Buckeye (conversational English) with
+correct and deliberately corrupted transcripts:
+
+| Confidence | Share of correct words | Share of wrong words | What it usually means |
+|---|---:|---:|---|
+| 0.8 - 1.0 | 67% | 3% | The word is there, and its timing can be trusted. |
+| 0.5 - 0.8 | 24% | 3% | Almost always fine: fast, reduced or mumbled speech. |
+| 0.3 - 0.5 | 5% | 8% | Worth a look if timing matters. |
+| below 0.3 | 4% | 87% | Probably wrong: misheard or missing from the transcript, or displaced by speech next to it that the transcript leaves out. |
+
+"Wrong words" are substituted words, words of an unrelated transcript, and
+correct words misplaced by more than 100 ms because nearby speech was not
+transcribed. A cut-off at 0.5 catches 99% of substituted words, 93% of the
+misplaced ones and 96% of an unrelated transcript's words, and flags about
+10% of correct words.
+
+**What to do with it.**
+
+- **Look at runs, not single words.** One low word in a fluent stretch is
+  usually a fast or reduced word. Several low words in a row point at the
+  transcript: speech it leaves out, or a passage it gets wrong. In 10
+  minutes of correctly transcribed Buckeye the longest run below 0.5 was 5
+  words; leaving 2 minutes of speech untranscribed produced a run of 55.
+- **Expect lower values for some token types.** Cut-offs (`th-`) are
+  fragments by definition (median 0.33 on correct transcripts), very short
+  words under 100 ms score lower (median 0.76) than longer ones (0.88), and
+  fillers sit a little lower (0.77) than words (0.87). Judge these against
+  their own type, not against the 0.5 line.
+- **Use it to rank and filter, not as a probability.** It is a fit score,
+  not the probability that the word is correct. Filter words below a
+  threshold before training on the timestamps, or send the lowest-scoring
+  stretches to a human. The values are calibrated on conversational
+  speech in ordinary recording conditions, not on very noisy audio; there,
+  compare words within a recording rather than against fixed thresholds.
+- **It does not change the alignment.** The timestamps are the same with or
+  without it; a low score is a warning, not a correction.
 
 ### Long recordings
 
