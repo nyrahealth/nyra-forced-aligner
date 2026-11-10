@@ -194,3 +194,34 @@ def test_word_confidence_separates_matching_from_mismatched_audio(model_dir):
         if good.word != "[UM]":
             assert bad.confidence < good.confidence
     assert right.to_dict()["words"][0]["confidence"] == round(right.words[0].confidence, 3)
+
+
+class _LocalWavLM:
+    """Stand-in for WavLM whose frame j depends only on its own 400 samples."""
+
+    def parameters(self):
+        import torch
+        yield torch.zeros(1)
+
+    def __call__(self, x, output_hidden_states=True):
+        from types import SimpleNamespace
+        frames = x.unfold(1, 400, 320).mean(-1, keepdim=True)
+        return SimpleNamespace(hidden_states=[frames] * 24)
+
+
+@pytest.mark.parametrize("seconds", [2.0, 65.3])
+def test_leading_pad_keeps_every_frame_in_place(seconds):
+    """The 0.24 s pad changes WavLM's left context, never the frame grid."""
+    import torch
+    from nyra_align.features import LEAD_PAD_SAMPLES, extract_wavlm, wavlm_frames
+
+    n = round(seconds * 16_000)
+    wave = torch.linspace(-1, 1, n)[None, :]
+    plain = extract_wavlm(_LocalWavLM(), wave, layer=23, return_torch=True, lead_pad_samples=0)
+    padded = extract_wavlm(_LocalWavLM(), wave, layer=23, return_torch=True)
+    assert LEAD_PAD_SAMPLES == 3840
+    assert len(plain) == len(padded) == 2 * wavlm_frames(n)
+    # Frame 0 is interpolated against the pad instead of clamped; the rest match.
+    assert torch.allclose(plain[1:], padded[1:], atol=1e-6)
+    with pytest.raises(ValueError):
+        extract_wavlm(_LocalWavLM(), wave, layer=23, lead_pad_samples=100)

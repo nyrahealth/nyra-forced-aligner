@@ -285,6 +285,26 @@ mean word-boundary error is the same whether it is aligned in one call or in
 | in ~10 min pieces | 197.5 ms | 16.5 ms |
 | in one call | 1154.9 ms | 16.7 ms |
 
+### Leading silence
+
+Since 0.2.5 the aligner puts 0.24 s of silence in front of the audio before
+computing features and drops those frames again, so timestamps are unchanged.
+Without it, the model's first frames have no left context and do not look like
+the silence they are: on TIMIT, whose recordings open with 0.1-0.2 s of silence,
+the first word absorbed it, with a mean error of 77 ms on its start. Measured
+with [FA-Bench](https://github.com/olewave/fa-bench) (word MAE over boundaries,
+word timestamp F1 at 20 ms):
+
+| | 0.2.4 | 0.2.5 |
+|---|---:|---:|
+| TIMIT core test, word MAE | 27.0 ms | **24.1 ms** |
+| TIMIT, first word's start | 76.8 ms | **45.5 ms** |
+| TIMIT, word timestamp F1 | 0.686 | 0.681 |
+| Buckeye test, word MAE | 20.6 ms | **19.9 ms** |
+| Buckeye, word timestamp F1 | 0.729 | 0.727 |
+
+Longer pads, and a pad at the end as well, were measured and did worse.
+
 ## How it works
 
 The full story is in the deep-dive post:

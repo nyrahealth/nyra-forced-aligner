@@ -20,6 +20,13 @@ BATCH_OVERLAP_SECONDS = 1
 # A 30 s window therefore gives 1499 frames, not 1500.
 RECEPTIVE_FIELD = 400
 HOP = 320
+# Silence prepended before WavLM and cut off again afterwards. Without left
+# context WavLM's first frames do not look like the silence they are, so leading
+# silence was absorbed into the first word (TIMIT: 77 ms mean error on the first
+# word's start, 42% of them over 100 ms). 0.24 s is 12 WavLM frames, so the
+# padded frames drop off exactly and every timestamp stays on its grid. Measured
+# against 0.48 s, 1 s and an extra trailing pad: 0.24 s at the start only is best.
+LEAD_PAD_SAMPLES = 12 * HOP
 
 
 def wavlm_frames(num_samples: int) -> int:
@@ -106,7 +113,8 @@ def load_audio(audio, sample_rate: int = 16_000) -> torch.Tensor:
 
 def extract_wavlm(model, waveform: torch.Tensor, layer: int = 23,
                   device: str = "cpu", batch_size: int = 8,
-                  return_torch: bool = False):
+                  return_torch: bool = False,
+                  lead_pad_samples: int = LEAD_PAD_SAMPLES):
     """(1, N) waveform -> (T_10ms, 1024) float32, windowed for long audio.
 
     Long recordings are cut into 30 s windows with 1 s overlap; all
@@ -118,7 +126,16 @@ def extract_wavlm(model, waveform: torch.Tensor, layer: int = 23,
     Up to 0.2.2 the stitch dropped a fixed 50 frames per later window, as if a
     30 s window gave 1500 frames; it gives 1499, so the timeline lost 20 ms
     every 29 s (2.3 s after an hour). Audio of up to 30 s is unaffected.
+
+    Since 0.2.5 `lead_pad_samples` of silence (0.24 s) go in front of the audio
+    and their frames are dropped from the result, so frame 0 is still the
+    recording's first 10 ms; see LEAD_PAD_SAMPLES. Pass 0 for 0.2.4 behaviour.
     """
+    if lead_pad_samples % HOP:
+        raise ValueError(f"lead_pad_samples must be a multiple of {HOP}")
+    if lead_pad_samples:
+        waveform = torch.cat(
+            [waveform.new_zeros((waveform.shape[0], lead_pad_samples)), waveform], dim=1)
     sr = 16_000
     num_samples = waveform.shape[1]
     max_samples = MAX_AUDIO_SECONDS * sr
@@ -153,6 +170,7 @@ def extract_wavlm(model, waveform: torch.Tensor, layer: int = 23,
         feats_20ms.T.unsqueeze(0), scale_factor=2,
         mode="linear", align_corners=False,
     ).squeeze(0).T
+    feats_10ms = feats_10ms[lead_pad_samples // (HOP // 2):]
     if return_torch:
         return feats_10ms.float()
     return feats_10ms.cpu().numpy().astype(np.float32)
